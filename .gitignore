@@ -1,0 +1,10 @@
+.env
+__pycache__/
+
+# Generated experiment artifacts
+/data/runs/
+/data/*_graphs.jsonl
+/data/*_v*_synthesized.jsonl
+/data/*_v*_synthesized_stats.json
+/data/*_v*_synthesized_state.json
+/data/*_v*_synthesized_state.json.lock
