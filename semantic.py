@@ -1,10 +1,10 @@
 # 역추출 결과를 비교 가능한 구조로 바꿔 정답과 다른 사건·역할·담화 관계를 찾는다.
 """Compare independently extracted events and discourse against the dataset contract."""
 
-from collections import Counter
+from collections import Counter, defaultdict
 from unicodedata import normalize
 
-from schema import SPEECH_ACTS, SPEECH_LEVELS
+from schema import FOCAL_ROLES, SPEECH_ACTS, SPEECH_LEVELS
 
 
 def text_key(text):
@@ -101,6 +101,117 @@ def event_signatures(events, speech_act, addressee):
     return signatures
 
 
+def _minimum_cost_assignment(costs):
+    """Match every row to a distinct column in a rectangular cost matrix."""
+    n_rows, n_columns = len(costs), len(costs[0])
+    row_potential, column_potential = [0] * (n_rows + 1), [0] * (n_columns + 1)
+    matched_rows = [0] * (n_columns + 1)
+    # Hungarian algorithm. Column zero stands for the row being added.
+    for new_row in range(1, n_rows + 1):
+        matched_rows[0] = new_row
+        previous = [0] * (n_columns + 1)
+        distances = [float("inf")] * (n_columns + 1)
+        used_columns = set()
+        column = 0
+        while True:
+            used_columns.add(column)
+            row = matched_rows[column]
+            delta, next_column = float("inf"), 0
+            for candidate in range(1, n_columns + 1):
+                if candidate in used_columns:
+                    continue
+                cost = costs[row - 1][candidate - 1] - row_potential[row] - column_potential[candidate]
+                if cost < distances[candidate]:
+                    distances[candidate], previous[candidate] = cost, column
+                if distances[candidate] < delta:
+                    delta, next_column = distances[candidate], candidate
+            for candidate in range(n_columns + 1):
+                if candidate in used_columns:
+                    row_potential[matched_rows[candidate]] += delta
+                    column_potential[candidate] -= delta
+                else:
+                    distances[candidate] -= delta
+            column = next_column
+            if not matched_rows[column]:
+                break
+        while column:
+            parent = previous[column]
+            matched_rows[column] = matched_rows[parent]
+            column = parent
+    return [(row - 1, column - 1) for column, row in enumerate(matched_rows[1:], start=1) if row]
+
+
+def _match_roles(expected, observed, focal_role):
+    if len(expected) > len(observed):
+        return [(gold, extracted) for extracted, gold in _match_roles(observed, expected, focal_role)]
+    # Prefer fewer role edits, using the frame's focal role to break ties.
+    scale = len(expected) + 1
+    costs = [
+        [scale * sum(gold.get(role) != extracted.get(role) for role in gold.keys() | extracted.keys())
+         + (gold.get(focal_role) != extracted.get(focal_role))
+         for extracted in observed]
+        for gold in expected
+    ]
+    return [(expected[row], observed[column]) for row, column in _minimum_cost_assignment(costs)]
+
+
+def _remove_swaps(changes):
+    """Consume closed cycles of changed values without reusing a changed slot."""
+    found = False
+    for slot, (before, after) in tuple(changes.items()):
+        if slot not in changes:
+            continue
+        # Look for a return path for before -> after, using other role changes.
+        route = {after: None}
+        queue = [after]
+        for value in queue:
+            for candidate, (start, end) in changes.items():
+                if start == value and end not in route:
+                    route[end] = (value, candidate)
+                    queue.append(end)
+            if before in route:
+                break
+        if before in route:
+            del changes[slot]
+            value = before
+            while value != after:
+                value, used_slot = route[value]
+                del changes[used_slot]
+            found = True
+    return found
+
+
+def _role_errors(expected_events, observed_events):
+    # Remove identical events, then align remaining same-frame events by content.
+    expected, observed = defaultdict(list), defaultdict(list)
+    for _, frame, roles in sorted((expected_events - observed_events).elements()):
+        expected[frame].append(dict(roles))
+    for _, frame, roles in sorted((observed_events - expected_events).elements()):
+        observed[frame].append(dict(roles))
+
+    errors = set()
+    for frame in expected.keys() & observed.keys():
+        by_role = defaultdict(dict)
+        for index, (gold, extracted) in enumerate(_match_roles(expected[frame], observed[frame], FOCAL_ROLES.get(frame))):
+            if gold.keys() - extracted.keys():
+                errors.add("missing_role")
+            if extracted.keys() - gold.keys():
+                errors.add("hallucinated_role")
+            changes = {role: (gold[role], extracted[role]) for role in sorted(gold.keys() & extracted.keys())
+                       if gold[role] != extracted[role]}
+            if _remove_swaps(changes):
+                errors.add("role_swap")
+            for role, values in changes.items():
+                by_role[role][index] = values
+        for changes in by_role.values():
+            if _remove_swaps(changes):
+                errors.add("role_swap")
+            if changes:
+                errors.add("role_value_mismatch")
+    return [error for error in ("missing_role", "hallucinated_role", "role_swap", "role_value_mismatch")
+            if error in errors]
+
+
 def comparison_errors(gold, extracted, addressee=None):
     """Report semantic errors without looking at reference dialogue or generation logs."""
     if not isinstance(extracted, dict):
@@ -138,21 +249,7 @@ def comparison_errors(gold, extracted, addressee=None):
         if observed_frames - expected_frames:
             errors.append("hallucinated_event")
 
-        if expected_frames == observed_frames:
-            expected_slots = Counter((frame, role) for _, frame, roles in expected.values() for role, _ in roles)
-            observed_slots = Counter((frame, role) for _, frame, roles in observed.values() for role, _ in roles)
-            if expected_slots - observed_slots:
-                errors.append("missing_role")
-            if observed_slots - expected_slots:
-                errors.append("hallucinated_role")
-            if expected_slots == observed_slots:
-                # 프레임별 역할값의 구성은 같지만 사건에 배정된 값이 다르면 역할 교차다.
-                expected_values = Counter((frame, role, value) for _, frame, roles in expected.values()
-                                          for role, value in roles)
-                observed_values = Counter((frame, role, value) for _, frame, roles in observed.values()
-                                          for role, value in roles)
-                reason = "role_swap" if expected_values == observed_values else "role_value_mismatch"
-                errors.append(reason)
+        errors.extend(_role_errors(expected_events, observed_events))
     else:
         # 사건이 일치하면 추출기가 붙인 ID를 실제 사건 내용으로 치환해 담화 구조를 비교한다.
         expected_tree, _ = discourse_tree(expected, gold["discourse"])

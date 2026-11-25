@@ -5,6 +5,7 @@
 Follows DATASET_PROTOCOL_KO_20261123.md (CheckList + Contrast Sets principles):
 - Pilot-30: Axis 2 contrastive pairs (20 = 10 pairs) + Axis 3 complex clauses (10)
 - Full-240: Axis 1 (60) + Axis 2 (80 = 40 pairs) + Axis 3 (60) + Axis 4 (40 = 20 supported edge + 20 unsupported)
+- Diag-40: role direction (10 pairs) + discourse contrast (10 pairs)
 """
 
 import argparse
@@ -17,9 +18,9 @@ from typing import Any, Dict, List, Optional
 from dataset_io import write_jsonl
 from schema import (
     AXIS1, AXIS2, AXIS3, AXIS4, AXIS4_STRESS_COUNTS, BOUNDARIES,
-    CHARACTERS, CODAS, ENTITY_BY_ID, ITEMS, LOCATIONS, PAIR_SWAP_ROLES,
-    PLAYER_ENTITY, SCHEMA_VERSION, SPEECH_ACTS, SPEECH_LEVELS, SUPPORTED_FRAMES,
-    UNSUPPORTED_FRAMES, Entity, derive_gold,
+    CHARACTERS, CODAS, DIAG_DISCOURSE, DIAG_ROLE, ENTITY_BY_ID, ITEMS, LOCATIONS,
+    PAIR_SWAP_ROLES, PLAYER_ENTITY, SCHEMA_VERSION, SPEECH_ACTS, SPEECH_LEVELS,
+    SUPPORTED_FRAMES, UNSUPPORTED_FRAMES, Entity, derive_gold,
 )
 
 
@@ -336,6 +337,102 @@ def generate_axis4_boundary(rng: random.Random, count: int) -> List[Dict[str, An
     return records
 
 
+def generate_diag_role_direction(rng: random.Random, num_pairs: int = 10) -> List[Dict[str, Any]]:
+    """Flip Agent <-> Recipient between two non-player NPCs with identical entity types."""
+    records: List[Dict[str, Any]] = []
+    for p in range(num_pairs):
+        speaker = rng.choice(CHARACTERS)
+        char_a, char_b = _pick_distinct(rng, CHARACTERS, 2, {speaker.id})
+        item = rng.choice(ITEMS)
+        act = "Inform" if p < 6 else "Question"
+        level = SPEECH_LEVELS[p % len(SPEECH_LEVELS)]
+        base_roles: Dict[str, str] = {"Agent": char_a.id, "Theme": item.id, "Recipient": char_b.id}
+        if p % 2 == 0:
+            base_roles["Source"] = rng.choice(LOCATIONS).id
+        flipped_roles = {**base_roles, "Agent": char_b.id, "Recipient": char_a.id}
+        for variant, roles in (("a", base_roles), ("b", flipped_roles)):
+            records.append(
+                _build_record(
+                    scenario_id=f"diag_dir_{p+1:03d}_{variant}",
+                    axis=DIAG_ROLE,
+                    subtype=f"role_direction_deliver_{act.lower()}",
+                    speaker=speaker,
+                    events=[{"id": "e1", "frame": "Deliver", "roles": roles}],
+                    discourse=[],
+                    speech_level=level,
+                    speech_act=act,
+                    pair_id=f"pair_dir_{p+1:03d}",
+                    pair_variant=variant,
+                )
+            )
+    return records
+
+
+def generate_diag_discourse_contrast(rng: random.Random, num_pairs: int = 10) -> List[Dict[str, Any]]:
+    """Contrast Coord and Reason on frame combinations held out of Pilot and Full."""
+    records: List[Dict[str, Any]] = []
+    patterns = ("need_fetch", "located_deliver", "danger_deliver")
+    for p in range(num_pairs):
+        cycle, pattern_index = divmod(p, len(patterns))
+        pattern = patterns[pattern_index]
+        speaker = rng.choice(CHARACTERS)
+        # 패턴 순환마다 화체를 한 칸 옮겨 각 패턴에 세 화체가 모두 나오게 한다.
+        level = SPEECH_LEVELS[(cycle + pattern_index) % len(SPEECH_LEVELS)]
+        act = "Inform" if p < 6 else "Request"
+        if pattern == "need_fetch":
+            item = rng.choice(ITEMS)
+            source = rng.choice(LOCATIONS)
+            events = [
+                {"id": "e1", "frame": "Need", "roles": {
+                    "Experiencer": PLAYER_ENTITY.id, "Required_Entity": item.id,
+                }},
+                {"id": "e2", "frame": "Fetch", "roles": {
+                    "Agent": PLAYER_ENTITY.id, "Theme": item.id, "Source": source.id,
+                }},
+            ]
+        elif pattern == "located_deliver":
+            recipient = _pick_distinct(rng, CHARACTERS, 1, {speaker.id})[0]
+            source = rng.choice(LOCATIONS)
+            item = rng.choice(ITEMS)
+            events = [
+                {"id": "e1", "frame": "Located_At", "roles": {"Entity": item.id, "Location": source.id}},
+                {"id": "e2", "frame": "Deliver", "roles": {
+                    "Agent": PLAYER_ENTITY.id, "Theme": item.id, "Recipient": recipient.id, "Source": source.id,
+                }},
+            ]
+        else:
+            danger_loc, source = _pick_distinct(rng, LOCATIONS, 2)
+            threat = _pick_distinct(rng, THREATS, 1, {speaker.id})[0]
+            recipient = _pick_distinct(rng, CHARACTERS, 1, {speaker.id, threat.id})[0]
+            item = rng.choice([ENTITY_BY_ID[k] for k in ("item_shield", "item_armor")])
+            events = [
+                {"id": "e1", "frame": "Danger", "roles": {
+                    "Location": danger_loc.id, "Threat": threat.id, "Target": recipient.id,
+                }},
+                {"id": "e2", "frame": "Deliver", "roles": {
+                    "Agent": PLAYER_ENTITY.id, "Theme": item.id, "Recipient": recipient.id, "Source": source.id,
+                }},
+            ]
+        coord_disc = [{"type": "Coord", "args": ["e1", "e2"]}]
+        reason_disc = [{"type": "Reason", "cause": "e1", "effect": "e2"}]
+        for variant, disc in (("a", coord_disc), ("b", reason_disc)):
+            records.append(
+                _build_record(
+                    scenario_id=f"diag_disc_{pattern}_{p+1:03d}_{variant}",
+                    axis=DIAG_DISCOURSE,
+                    subtype=f"discourse_contrast_{pattern}",
+                    speaker=speaker,
+                    events=deepcopy(events),
+                    discourse=disc,
+                    speech_level=level,
+                    speech_act=act,
+                    pair_id=f"pair_disc_{pattern}_{p+1:03d}",
+                    pair_variant=variant,
+                )
+            )
+    return records
+
+
 def generate_records(split: str, seed: int) -> List[Dict[str, Any]]:
     # 동일한 숫자 시드를 써도 분할과 스키마 버전에 따라 난수열을 구분한다.
     rng = random.Random(f"{seed}:{split}:v{SCHEMA_VERSION}")
@@ -349,6 +446,8 @@ def generate_records(split: str, seed: int) -> List[Dict[str, Any]]:
             + generate_axis3_complex(rng, count=60)
             + generate_axis4_boundary(rng, count=40)
         )
+    elif split == "diag40":
+        records = generate_diag_role_direction(rng, num_pairs=10) + generate_diag_discourse_contrast(rng, num_pairs=10)
     else:
         raise ValueError(f"Unknown split: {split}")
 
@@ -364,7 +463,7 @@ def generate_records(split: str, seed: int) -> List[Dict[str, Any]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 1: Generate deterministic RPG event-role graphs.")
-    parser.add_argument("--split", choices=["pilot30", "full240"], default="pilot30")
+    parser.add_argument("--split", choices=["pilot30", "full240", "diag40"], default="pilot30")
     parser.add_argument("--seed", type=int, default=2027)
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()

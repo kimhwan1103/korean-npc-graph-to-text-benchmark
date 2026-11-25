@@ -80,12 +80,14 @@ The extraction model receives the utterance, the speaker and addressee, and cand
 | Axis 4 · Boundary cases | 0 | 40 | The 20 supported cases have 5, 6, or 8 events, with 7, 7, and 6 cases respectively. The 20 unsupported cases cover four categories of five cases each, including unsupported frames, missing required roles, excessive discourse depth, and conflicting speech acts. |
 | Total | 30 | 240 | Pilot contains 30 supported scenarios. Full contains 220 supported and 20 unsupported scenarios. |
 
+`--split diag40` is an evaluation split with 10 role-direction reversal pairs and 10 discourse contrast pairs. Each discourse pair shares its two events, speech act, and speech level while contrasting `Coord` and `Reason`. Its direct causal frame combinations are `Need → Fetch`, `Located_At → Deliver`, and `Danger → Deliver`, all held out of the Pilot and Full generators. Each combination appears in all three speech levels. The new discourse IDs include the frame combination. Use a fresh `--run-dir` to generate and evaluate this revision if you already have a run directory.
+
 Each line of a UTF-8 JSONL file represents one scenario.
 
 | Field | Contents |
 | --- | --- |
 | `id`, `split`, `seed`, `schema_version` | Scenario ID, split, generation seed, and graph schema version |
-| `axis`, `subtype`, `pair_id`, `pair_variant` | Evaluation axis, subtype, Axis 2 contrast pair ID, and variant `a` or `b` |
+| `axis`, `subtype`, `pair_id`, `pair_variant` | Evaluation axis, subtype, contrast pair ID, and variant `a` or `b` |
 | `input_graph.entities` | Entity ID, `surface` form, entity type, animacy, and final consonant class |
 | `input_graph.events` | Event ID, frame, and `roles` mapping role names to entity IDs |
 | `utterance_goal` | Speaker and addressee IDs, `speech_act`, `speech_level`, target event IDs, and discourse relations |
@@ -241,7 +243,7 @@ The final dataset retains original references and review decisions in `draft_ref
      --extractor 'independent extractor name and version'
    ```
 
-The integrated command checks that the input files contain exactly the scenario IDs in the current synthesis output. Use the standalone commands below to score a full graph split with existing outputs. Scores are grouped by axis and event count and include exact role binding, role swap, omission, hallucination, speech act match, and speech level match rates. `exact_rate` is the proportion of supported scenarios that pass every check. `unsupported_detection_rate` is the proportion of unsupported scenarios for which the model returns unsupported. See `contrast_pairs` for the number of pairs with exact role bindings in both variants.
+The integrated command checks that the input files contain exactly the scenario IDs in the current synthesis output. Use the standalone commands below to score a full graph split with existing outputs. Scores are grouped by axis and event count and include exact role binding, role swap, omission, hallucination, speech act match, and speech level match rates. `exact_rate` is the proportion of supported scenarios that pass every check. `unsupported_detection_rate` is the proportion of unsupported scenarios for which the model returns unsupported. For pairs with one `a` and one `b`, `contrast_pairs` counts exact role bindings in both variants (`both_bindings_exact`) and full semantic matches in both variants (`both_exact`).
 
 ## Standalone commands and tests
 

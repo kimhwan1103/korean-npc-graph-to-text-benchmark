@@ -17,7 +17,7 @@ import step1_generate_graphs as generator
 import step2_3_openai_synthesize as synth
 from dataset_io import read_jsonl, write_jsonl
 from review_dataset import finalize, prepare, review_stats
-from schema import AXIS2, AXIS3, STYLE_KEYS, derive_gold
+from schema import AXIS2, AXIS3, DIAG_DISCOURSE, SPEECH_LEVELS, STYLE_KEYS, derive_gold
 from score_outputs import score
 from semantic import comparison_errors
 from validate_dataset import validate_records
@@ -313,6 +313,142 @@ class PipelineTests(unittest.TestCase):
                     )
                 self.assertIsNone(value)
                 self.assertEqual(usage["api_error"], error)
+
+    def test_compound_errors_preserve_role_swap_signal(self):
+        # 3사건 병렬에서 1사건을 누락하면서 나머지 2사건의 역할을 뒤바꾸면 둘 다 잡혀야 한다.
+        rec3 = deepcopy(next(r for r in self.pilot if r["axis"] == AXIS2 and len(r["gold_tuples"]["events"]) == 3))
+        gold = rec3["gold_tuples"]
+        obs = extraction(rec3)
+        ev0, ev1 = obs["events"][0]["roles"], obs["events"][1]["roles"]
+        swap_role = next(k for k in ev0 if k != "Agent" and ev0[k] != ev1[k])
+        ev0[swap_role], ev1[swap_role] = ev1[swap_role], ev0[swap_role]
+        obs["events"].pop()  # missing_event + role_swap
+        errs = comparison_errors(gold, obs, "모험가")
+        self.assertIn("missing_event", errs)
+        self.assertIn("role_swap", errs)
+
+        # 단일 사건에서 Agent와 Recipient 방향만 뒤집어도 role_swap으로 탐지되어야 한다.
+        single_gold = {
+            "speech_act": "Inform", "speech_level": "haera", "discourse": [],
+            "events": [{"event_id": "e1", "frame": "Deliver",
+                        "roles": {"Agent": "기사", "Theme": "약초", "Recipient": "상인"}}],
+        }
+        flipped = deepcopy(single_gold)
+        flipped["events"][0]["roles"]["Agent"] = "상인"
+        flipped["events"][0]["roles"]["Recipient"] = "기사"
+        flipped["extra_facts"] = []
+        self.assertIn("role_swap", comparison_errors(single_gold, flipped, "모험가"))
+
+        # 존재하지 않는 개체로의 단순 오기입은 role_swap이 아니라 role_value_mismatch여야 한다.
+        bogus = deepcopy(single_gold)
+        bogus["events"][0]["roles"]["Recipient"] = "도적"
+        bogus["extra_facts"] = []
+        errs_bogus = comparison_errors(single_gold, bogus, "모험가")
+        self.assertIn("role_value_mismatch", errs_bogus)
+        self.assertNotIn("role_swap", errs_bogus)
+
+    def test_cross_event_swap_requires_exchange_and_keeps_other_value_errors(self):
+        rec = self.pilot[0]
+        gold = rec["gold_tuples"]
+        observed = extraction(rec)
+        first, second = (event["roles"] for event in observed["events"])
+        first["Recipient"] = second["Recipient"]
+        second["Recipient"] = "다른 인물"
+        self.assertEqual(comparison_errors(gold, observed, "모험가"), ["role_value_mismatch"])
+
+        second["Recipient"] = gold["events"][0]["roles"]["Recipient"]
+        second["Agent"] = "다른 인물"
+        observed["events"].reverse()
+        for i, event in enumerate(observed["events"]):
+            event["event_id"] = f"x{i}"
+        self.assertEqual(comparison_errors(gold, observed, "모험가"), ["role_swap", "role_value_mismatch"])
+
+    def test_role_omission_survives_a_hallucinated_event(self):
+        rec = self.pilot[0]
+        observed = extraction(rec)
+        del observed["events"][1]["roles"]["Recipient"]
+        for extra in (
+            {"event_id": "x3", "frame": "Danger", "roles": {"Location": "동굴", "Threat": "도적"}},
+            {"event_id": "x3", "frame": "Deliver",
+             "roles": {"Agent": "모험가", "Theme": "다른 물건", "Recipient": "다른 인물"}},
+        ):
+            with self.subTest(frame=extra["frame"]):
+                report = score([rec], [{"id": rec["id"], "extraction": {
+                    **observed, "events": [*observed["events"], extra],
+                }}])["overall"]
+                self.assertEqual(report["errors"], {"hallucinated_event": 1, "missing_role": 1})
+                self.assertEqual(report["omission_rate"], 1.0)
+                self.assertEqual(report["hallucination_rate"], 1.0)
+
+    def test_swap_does_not_consume_an_extra_copy_of_a_role_value(self):
+        rec = next(row for row in self.pilot if len(row["gold_tuples"]["events"]) == 3
+                   and row["gold_tuples"]["events"][0]["frame"] == "Deliver"
+                   and row["axis"] == AXIS2)
+        observed = extraction(rec)
+        first, second, third = (event["roles"] for event in observed["events"])
+        first["Recipient"], second["Recipient"] = second["Recipient"], first["Recipient"]
+        third["Recipient"] = first["Recipient"]
+        self.assertEqual(comparison_errors(rec["gold_tuples"], observed, "모험가"),
+                         ["role_swap", "role_value_mismatch"])
+
+    def test_diag40_generation_validation_and_both_exact_scoring(self):
+        diag = read_jsonl(self.generate("diag40", self.root / "diag40.jsonl"))
+        self.assertEqual(len(diag), 40)
+        self.assertEqual(validate_records(diag), ("diag40", 20))
+
+        outputs = [{"id": rec["id"], "extraction": extraction(rec)} for rec in diag]
+        rep_ok = score(diag, outputs)
+        self.assertEqual(rep_ok["contrast_pairs"]["both_exact"], 20)
+        disc_idx = next(i for i, rec in enumerate(diag) if rec["axis"] == DIAG_DISCOURSE and rec["pair_variant"] == "b")
+        for relation in ({"type": "Coord", "args": ["e1", "e2"]}, {"type": "Reason", "cause": "e2", "effect": "e1"}):
+            with self.subTest(relation=relation):
+                outputs[disc_idx]["extraction"]["discourse"] = [relation]
+                rep_bad = score(diag, outputs)
+                self.assertEqual(rep_bad["contrast_pairs"]["both_bindings_exact"], 20)
+                self.assertEqual(rep_bad["contrast_pairs"]["both_exact"], 19)
+
+    def test_diag40_discourse_frame_pairs_are_held_out_and_cover_all_levels(self):
+        seen_frame_pairs = set()
+        for split in ("pilot30", "full240"):
+            for record in generator.generate_records(split, 4047):
+                frames = {event["id"]: event["frame"] for event in record["input_graph"]["events"]}
+                for relation in record["utterance_goal"]["discourse"]:
+                    if relation["type"] == "Reason" and relation["cause"] in frames and relation["effect"] in frames:
+                        seen_frame_pairs.add((frames[relation["cause"]], frames[relation["effect"]]))
+
+        levels_by_frames = {}
+        for record in generator.generate_records("diag40", 2027):
+            if record["axis"] == DIAG_DISCOURSE and record["pair_variant"] == "b":
+                frames = tuple(event["frame"] for event in record["gold_tuples"]["events"])
+                levels_by_frames.setdefault(frames, set()).add(record["utterance_goal"]["speech_level"])
+
+        self.assertEqual(len(levels_by_frames), 3)
+        self.assertFalse(seen_frame_pairs.intersection(levels_by_frames))
+        for frames, levels in levels_by_frames.items():
+            with self.subTest(frames=frames):
+                self.assertEqual(levels, set(SPEECH_LEVELS))
+
+    def test_diag40_rejects_identical_cause_and_effect_events(self):
+        pair = [rec for rec in generator.generate_records("diag40", 2027) if rec["axis"] == DIAG_DISCOURSE][:2]
+        for record in pair:
+            graph = record["input_graph"]
+            first, second = graph["events"]
+            graph["events"][1] = {**deepcopy(first), "id": second["id"]}
+            record["gold_tuples"] = derive_gold(graph, record["utterance_goal"])
+        with self.assertRaisesRegex(ValueError, "requires distinct events"):
+            validate_records(pair, partial=True)
+
+    def test_score_counts_only_complete_pairs_with_distinct_variants(self):
+        a, b = self.pilot[:2]
+        duplicate_a = {**a, "id": f"{a['id']}_duplicate"}
+        for records, expected_pairs in (([a], 0), ([a, duplicate_a], 0), ([a, b, duplicate_a], 0), ([b, a], 1)):
+            with self.subTest(ids=[rec["id"] for rec in records]):
+                outputs = [{"id": rec["id"], "extraction": extraction(rec)} for rec in records]
+                report = score(records, outputs)
+                self.assertEqual(report["overall"]["exact_rate"], 1.0)
+                self.assertEqual(report["contrast_pairs"], {
+                    "total": expected_pairs, "both_bindings_exact": expected_pairs, "both_exact": expected_pairs,
+                })
 
 
 if __name__ == "__main__":

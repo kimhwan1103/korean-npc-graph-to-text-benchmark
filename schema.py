@@ -12,8 +12,14 @@ AXIS1 = "Axis1_SingleEvent"
 AXIS2 = "Axis2_ContrastiveBinding"
 AXIS3 = "Axis3_ComplexDiscourse"
 AXIS4 = "Axis4_FailureBoundary"
+DIAG_ROLE = "Diag_RoleDirection"
+DIAG_DISCOURSE = "Diag_DiscourseContrast"
 # 생성기와 검증기가 같은 분할별 시나리오 수와 사건 수 분포를 사용한다.
-SPLIT_COUNTS = {"pilot30": {AXIS2: 20, AXIS3: 10}, "full240": {AXIS1: 60, AXIS2: 80, AXIS3: 60, AXIS4: 40}}
+SPLIT_COUNTS = {
+    "pilot30": {AXIS2: 20, AXIS3: 10},
+    "full240": {AXIS1: 60, AXIS2: 80, AXIS3: 60, AXIS4: 40},
+    "diag40": {DIAG_ROLE: 20, DIAG_DISCOURSE: 20},
+}
 AXIS2_PAIR_COUNTS = {"pilot30": {2: 4, 3: 3, 4: 3}, "full240": {2: 14, 3: 13, 4: 13}}
 AXIS4_STRESS_COUNTS = {5: 7, 6: 7, 8: 6}
 BOUNDARIES = ("unsupported_frame", "missing_required_role", "excessive_nesting_depth", "conflicting_speech_acts")

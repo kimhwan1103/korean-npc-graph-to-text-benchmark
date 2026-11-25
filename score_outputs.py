@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # 독립적으로 역추출한 사건과 역할을 그래프 정답과 비교해 점수를 집계한다.
-"""Score independently extracted pilot or benchmark predictions against graph gold."""
+"""Score independently extracted predictions against graph gold."""
 
 import argparse
 import json
@@ -65,7 +65,13 @@ def score(records, predictions):
         rows.append(row)
         buckets[(record["axis"], row["size"])].append(row)
         if record["pair_id"]:
-            pairs[record["pair_id"]].append(row["binding_exact"])
+            pairs[record["pair_id"]].append((record.get("pair_variant"), row))
+
+    complete_pairs = [
+        members for members in pairs.values()
+        if len(members) == 2 and {variant for variant, _ in members} == {"a", "b"}
+        and all(row["supported"] for _, row in members)
+    ]
 
     def summarize(group):
         supported = [row for row in group if row["supported"]]
@@ -86,7 +92,11 @@ def score(records, predictions):
         "by_axis_and_size": [
             {"axis": axis, "size": size, **summarize(group)} for (axis, size), group in sorted(buckets.items())
         ],
-        "contrast_pairs": {"total": len(pairs), "both_bindings_exact": sum(all(pair) for pair in pairs.values())},
+        "contrast_pairs": {
+            "total": len(complete_pairs),
+            "both_bindings_exact": sum(all(row["binding_exact"] for _, row in pair) for pair in complete_pairs),
+            "both_exact": sum(all(row["exact"] for _, row in pair) for pair in complete_pairs),
+        },
         "rows": rows,
     }
 

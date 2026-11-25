@@ -80,12 +80,14 @@ python3 main.py --split pilot30 \
 | Axis 4 실패 경계 | 0 | 40 | 지원 사례 20개는 사건 수 5·6·8에 각각 7·7·6개입니다. 미지원 사례 20개는 미지원 프레임·필수 역할 누락·담화 깊이 초과·상충 화행이 각각 5개입니다. |
 | 합계 | 30 | 240 | Pilot은 모두 지원 사례이며 Full은 지원 220개와 미지원 20개를 포함합니다. |
 
+`--split diag40`은 역할 방향 반전 10쌍과 담화 대조 10쌍으로 구성된 평가 전용 분할입니다. 담화 쌍은 두 사건과 화행·화체를 공유하고 `Coord`와 `Reason`을 대조합니다. `Need → Fetch`, `Located_At → Deliver`, `Danger → Deliver`는 Pilot과 Full의 생성 규칙에 없는 직접 인과 프레임 조합입니다. 각 조합에는 세 화체가 모두 포함됩니다. 새 담화 쌍은 프레임 조합이 포함된 ID를 사용하므로 기존 실행 폴더가 있다면 새 `--run-dir`에서 다시 생성하고 평가합니다.
+
 UTF-8 JSONL 파일은 한 줄에 한 시나리오를 저장합니다. 주요 키는 다음과 같습니다.
 
 | 키 | 내용 |
 | --- | --- |
 | `id`, `split`, `seed`, `schema_version` | 시나리오 ID, 분할, 생성 시드, 그래프 스키마 버전 |
-| `axis`, `subtype`, `pair_id`, `pair_variant` | 평가 축과 세부 유형, Axis 2 대조쌍 ID 및 변형 `a`·`b` |
+| `axis`, `subtype`, `pair_id`, `pair_variant` | 평가 축과 세부 유형, 대조쌍 ID 및 변형 `a`·`b` |
 | `input_graph.entities` | 개체 ID, 표기 `surface`, 개체 유형, 생물성, 받침 범주 |
 | `input_graph.events` | 사건 ID, 프레임, 역할명에서 개체 ID로 연결되는 `roles` |
 | `utterance_goal` | 화자·청자 ID, `speech_act`, `speech_level`, 대상 사건 ID, 담화 관계 |
@@ -241,7 +243,7 @@ python3 validate_dataset.py data/runs/pilot30_seed2027_v4/final.jsonl --stage fi
      --extractor '독립 추출기 이름과 버전'
    ```
 
-통합 명령은 현재 합성 산출물의 시나리오 ID와 입력 파일의 ID가 일치하는지 검사합니다. 전체 분할의 그래프와 출력만으로 독립 채점을 실행하려면 아래의 개별 명령을 사용할 수 있습니다. 채점은 사건 수·축별 역할 바인딩 일치율, 역할 교차율, 누락률, 환각률, 화행·화체 일치율을 집계합니다. `exact_rate`는 모든 검사에 통과한 지원 시나리오 비율이며, `unsupported_detection_rate`는 미지원 시나리오를 미지원으로 반환한 비율입니다. 대조쌍 양쪽의 역할 바인딩 일치 건수는 `contrast_pairs`에서 확인합니다.
+통합 명령은 현재 합성 산출물의 시나리오 ID와 입력 파일의 ID가 일치하는지 검사합니다. 전체 분할의 그래프와 출력만으로 독립 채점을 실행하려면 아래의 개별 명령을 사용할 수 있습니다. 채점은 사건 수·축별 역할 바인딩 일치율, 역할 교차율, 누락률, 환각률, 화행·화체 일치율을 집계합니다. `exact_rate`는 모든 검사에 통과한 지원 시나리오 비율이며, `unsupported_detection_rate`는 미지원 시나리오를 미지원으로 반환한 비율입니다. `contrast_pairs`는 `a`와 `b`가 각각 한 번씩 있는 쌍에 대해 양쪽의 역할 바인딩 일치 건수(`both_bindings_exact`)와 전체 의미 검사 통과 건수(`both_exact`)를 집계합니다.
 
 ## 단계별 실행과 테스트
 

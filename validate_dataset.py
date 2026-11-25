@@ -10,12 +10,13 @@ from pathlib import Path
 from dataset_io import read_jsonl
 from schema import (
     AXIS1, AXIS2, AXIS3, AXIS4, AXIS2_PAIR_COUNTS, AXIS4_STRESS_COUNTS, BOUNDARIES,
-    CHARACTERS, CODAS, FOCAL_ROLES, FRAME_OPTIONAL_ROLES, FRAME_REQUIRED_ROLES, ITEMS,
-    LOCATIONS, MAX_DISCOURSE_DEPTH, PAIR_SWAP_ROLES, ROLE_TYPES, SCHEMA_VERSION,
-    SPEECH_ACTS, SPEECH_LEVELS, SPLIT_COUNTS, STYLE_KEYS, SUPPORTED_FRAMES,
-    UNSUPPORTED_FRAMES, compute_coda, derive_gold,
+    CHARACTERS, CODAS, DIAG_DISCOURSE, DIAG_ROLE, FOCAL_ROLES, FRAME_OPTIONAL_ROLES,
+    FRAME_REQUIRED_ROLES, ITEMS, LOCATIONS, MAX_DISCOURSE_DEPTH, PAIR_SWAP_ROLES,
+    PLAYER_ENTITY, ROLE_TYPES, SCHEMA_VERSION, SPEECH_ACTS, SPEECH_LEVELS,
+    SPLIT_COUNTS, STYLE_KEYS, SUPPORTED_FRAMES, UNSUPPORTED_FRAMES, compute_coda,
+    derive_gold,
 )
-from semantic import comparison_errors, discourse_tree, text_key, unique_index
+from semantic import comparison_errors, discourse_tree, event_signatures, text_key, unique_index
 
 
 def require(condition, message):
@@ -102,9 +103,9 @@ def validate_graph(record):
 
     # 그래프와 발화 목적에서 정답을 다시 만들어 저장된 정답과 같은지 확인한다.
     require(record["gold_tuples"] == derive_gold(graph, goal), "Gold does not match graph and goal")
-    if record["axis"] == AXIS2:
+    if record["axis"] in {AXIS2, DIAG_ROLE, DIAG_DISCOURSE}:
         require(isinstance(record.get("pair_id"), str) and record["pair_id"].startswith(split + "_pair_")
-                and record.get("pair_variant") in {"a", "b"}, "Axis 2 requires a split-scoped pair and variant")
+                and record.get("pair_variant") in {"a", "b"}, "Contrastive axis requires a split-scoped pair and variant")
     else:
         require(record.get("pair_id") is None and record.get("pair_variant") is None, "Unexpected pair metadata")
 
@@ -113,13 +114,43 @@ def validate_pair(rows):
     variants = unique_index(rows, "pair_variant")
     require(set(variants) == {"a", "b"}, "Expected variants a and b")
     a, b = variants["a"], variants["b"]
-    fields = ("utterance_goal", "split", "seed", "axis", "subtype", "expect_supported")
-    require(all(a[key] == b[key] for key in fields), "Pair differs outside event bindings")
+    common_fields = ("split", "seed", "axis", "subtype", "expect_supported")
+    require(all(a[key] == b[key] for key in common_fields), "Pair differs in metadata")
     require(unique_index(a["input_graph"]["entities"], "id") == unique_index(b["input_graph"]["entities"], "id"),
             "Pair has different entities")
     events_a = unique_index(a["input_graph"]["events"], "id")
     events_b = unique_index(b["input_graph"]["events"], "id")
     require(events_a.keys() == events_b.keys() == set(a["utterance_goal"]["target_events"]), "Pair has different events")
+
+    if a["axis"] == DIAG_ROLE:
+        require(a["utterance_goal"] == b["utterance_goal"], "Role-direction pair differs in utterance_goal")
+        require(len(events_a) == 1, "Diag_RoleDirection requires one event")
+        ev_a, ev_b = next(iter(events_a.values())), next(iter(events_b.values()))
+        require(ev_a["frame"] == ev_b["frame"] == "Deliver", "Diag_RoleDirection requires Deliver")
+        ra, rb = ev_a["roles"], ev_b["roles"]
+        require(ra.keys() == rb.keys(), "Role-direction pair changed role schema")
+        require(ra["Agent"] != PLAYER_ENTITY.id and ra["Recipient"] != PLAYER_ENTITY.id, "Diag_RoleDirection requires non-player NPCs")
+        require(ra["Agent"] == rb["Recipient"] and ra["Recipient"] == rb["Agent"] and ra["Agent"] != ra["Recipient"],
+                "Role-direction pair must flip Agent and Recipient")
+        for role in ra.keys() - {"Agent", "Recipient"}:
+            require(ra[role] == rb[role], f"Role-direction pair changed {role}")
+        return
+
+    if a["axis"] == DIAG_DISCOURSE:
+        require(len(events_a) == 2, "Discourse-contrast pair requires exactly two events")
+        require(a["input_graph"] == b["input_graph"], "Discourse-contrast pair must share identical events")
+        ga, gb = a["utterance_goal"], b["utterance_goal"]
+        for key in ("speaker", "addressee", "speech_level", "speech_act", "target_events"):
+            require(ga[key] == gb[key], f"Discourse-contrast pair differs in {key}")
+        signatures = event_signatures(a["gold_tuples"]["events"], ga["speech_act"], None)
+        require(len(set(signatures.values())) == 2, "Discourse-contrast pair requires distinct events")
+        cause, effect = ga["target_events"]
+        require(ga["discourse"] == [{"type": "Coord", "args": ga["target_events"]}]
+                and gb["discourse"] == [{"type": "Reason", "cause": cause, "effect": effect}],
+                "Discourse-contrast pair must contrast Coord(a) vs Reason(b)")
+        return
+
+    require(a["utterance_goal"] == b["utterance_goal"], "Pair differs outside event bindings")
     frames = {event["frame"] for event in events_a.values()}
     require(len(frames) == 1 and len(events_a) in (2, 3, 4), "Expected 2–4 events with the same frame")
     frame = next(iter(frames))
@@ -199,8 +230,13 @@ def validate_coverage(records, split, pairs):
                 "Incomplete Axis 1 matrix")
         require(all(codas[(level, coda)] for level, coda in product(SPEECH_LEVELS, CODAS)),
                 "Axis 1 confounds coda and speech level")
-    require(Counter(len(pair[0]["utterance_goal"]["target_events"]) for pair in pairs.values())
-            == AXIS2_PAIR_COUNTS[split], "Wrong Axis 2 pair-size distribution")
+    if split in AXIS2_PAIR_COUNTS:
+        axis2_pairs = [p for p in pairs.values() if p[0]["axis"] == AXIS2]
+        require(Counter(len(pair[0]["utterance_goal"]["target_events"]) for pair in axis2_pairs)
+                == AXIS2_PAIR_COUNTS[split], "Wrong Axis 2 pair-size distribution")
+    if split == "diag40":
+        require(Counter(p[0]["axis"] for p in pairs.values()) == {DIAG_ROLE: 10, DIAG_DISCOURSE: 10},
+                "Wrong diag40 pair distribution")
     axis3 = [record for record in records if record["axis"] == AXIS3]
     for rec in axis3:
         require(any(rel["type"] == "Reason" for rel in rec["utterance_goal"]["discourse"]),
