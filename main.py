@@ -11,7 +11,7 @@ from dataset_io import read_jsonl, write_json, write_jsonl
 from evaluate_synthetic_quality import evaluate_dataset, print_summary
 from review_dataset import finalize, prepare as prepare_review, review_stats
 from schema import SPLIT_COUNTS
-from score_outputs import prepare as prepare_extraction, score
+from score_outputs import evaluate_extractions, prepare_jobs
 from step1_generate_graphs import generate_records
 from step2_3_openai_synthesize import PIPELINE_VERSION, add_synthesis_options, run_lock, synthesize, validate_synthesis_options
 from validate_dataset import validate_records
@@ -103,12 +103,15 @@ def run_pipeline(args):
             print(f"[Step 4] 저자 검수 최종본 {final_path}")
 
         if predictions is not None:
-            write_jsonl(jobs_path, prepare_extraction(drafts, predictions))
+            jobs = list(prepare_jobs(drafts, predictions))
+            if extractions is not None:
+                report["independent_scores"] = {
+                    "extractor": args.extractor, **evaluate_extractions(drafts, predictions, extractions)
+                }
+                print(f"[독립 채점] {json.dumps(report['independent_scores']['overall'], ensure_ascii=False)}")
+            write_jsonl(jobs_path, jobs)
             report["artifacts"]["extraction_jobs"] = jobs_path.name
             print(f"[독립 역추출] 작업 파일 {jobs_path}")
-        if extractions is not None:
-            report["independent_scores"] = {"extractor": args.extractor, **score(drafts, extractions)}
-            print(f"[독립 채점] {json.dumps(report['independent_scores']['overall'], ensure_ascii=False)}")
 
         write_json(report_path, report)
         if report["draft_quality"]["counts"]["total_verified_references"]:
@@ -132,8 +135,8 @@ def main():
     add_synthesis_options(parser)
     args = parser.parse_args()
     validate_synthesis_options(parser, args)
-    if args.extractions and not (args.extractor and args.extractor.strip()):
-        parser.error("--extractions를 사용할 때는 --extractor도 지정하세요.")
+    if args.extractions and not (args.predictions and args.extractor and args.extractor.strip()):
+        parser.error("--extractions를 사용할 때는 원본 --predictions와 --extractor도 지정하세요.")
     try:
         run_pipeline(args)
     except (ValueError, OSError, RuntimeError) as exc:

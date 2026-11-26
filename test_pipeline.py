@@ -18,7 +18,7 @@ import step2_3_openai_synthesize as synth
 from dataset_io import read_jsonl, write_jsonl
 from review_dataset import finalize, prepare, review_stats
 from schema import AXIS2, AXIS3, DIAG_DISCOURSE, SPEECH_LEVELS, STYLE_KEYS, derive_gold
-from score_outputs import score
+from score_outputs import prepare_jobs, score
 from semantic import comparison_errors
 from validate_dataset import validate_records
 
@@ -238,8 +238,12 @@ class PipelineTests(unittest.TestCase):
         extraction_file = self.root / "independent.jsonl"
         predictions_file = self.root / "predictions.jsonl"
         write_jsonl(review_file, reviews)
-        write_jsonl(extraction_file, [{"id": record["id"], "extraction": extraction(record)} for record in sample])
-        write_jsonl(predictions_file, [{"id": record["id"], "text": "실험 모델 대사"} for record in sample])
+        predictions = [{"id": record["id"], "text": "실험 모델 대사"} for record in sample]
+        write_jsonl(predictions_file, predictions)
+        write_jsonl(extraction_file, [
+            {"id": job["id"], "input_sha256": job["input_sha256"], "extraction": extraction(record)}
+            for record, job in zip(sample, prepare_jobs(sample, predictions))
+        ])
         args += ["--author-review", str(review_file), "--extractions", str(extraction_file),
                  "--extractor", "test extractor", "--predictions", str(predictions_file)]
         with patch("sys.argv", args), patch.dict("os.environ", {}, clear=True), \

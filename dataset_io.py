@@ -41,3 +41,14 @@ def write_json(path, data):
 
 def write_jsonl(path, rows):
     atomic_write(path, "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+
+
+def validate_paths(inputs, outputs):
+    taken = [path.resolve() for path in inputs if path is not None]
+    for output in outputs:
+        if output is None:
+            continue
+        path = output.resolve()
+        if any(path == other or (path.exists() and other.exists() and path.samefile(other)) for other in taken):
+            raise ValueError(f"Output path overlaps an input or another output: {output}")
+        taken.append(path)

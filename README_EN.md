@@ -118,7 +118,7 @@ The speech acts are `Inform`, `Request`, `Question`, and `Warn`. Korean speech l
 | `--max-retries` | `2` | Number of regeneration attempts for each style after the initial attempt. Accepted values are `0`, `1`, and `2`. |
 | `--author-review` | Omitted | Completed review JSONL used to create the final dataset and compute its quality metrics |
 | `--predictions` | Omitted | Experimental model output JSONL used to prepare independent extraction jobs |
-| `--extractions`, `--extractor` | Omitted | Independent extraction JSONL and extractor name and version. Supply both to add model scores to the report. |
+| `--extractions`, `--extractor` | Omitted | Independent extraction JSONL and extractor name and version. Supply both together with the original `--predictions` to add model scores to the report. |
 
 | File in the run directory | Contents |
 | --- | --- |
@@ -235,15 +235,15 @@ The final dataset retains original references and review decisions in `draft_ref
      --predictions outputs.jsonl
    ```
 
-3. Save the extraction results as lines of the form `{"id":"scenario ID","extraction":{...}}`. Each `extraction` requires `speech_act`, `speech_level`, `events`, `discourse`, and `extra_facts`. Each event contains `event_id`, `frame`, and `roles`. In externally extracted results, `roles` is an object mapping roles to surface forms, such as `{"Theme":"약초"}`. Preserve an unsupported response as `{"id":"…","status":"unsupported"}`.
+3. Save the extraction results as lines of the form `{"id":"scenario ID","input_sha256":"hash from job file","extraction":{...}}`. Each `extraction` requires `speech_act`, `speech_level`, `events`, `discourse`, and `extra_facts`. Each event contains `event_id`, `frame`, and `roles`. In externally extracted results, `roles` is an object mapping roles to surface forms, such as `{"Theme":"약초"}`. Copy `id`, `input_sha256`, and `status` from jobs marked `empty` or `unsupported`.
 
    ```bash
    python3 main.py --split pilot30 --run-dir data/runs/pilot30_seed2027_v4 \
-     --extractions independent_extractions.jsonl \
+     --predictions outputs.jsonl --extractions independent_extractions.jsonl \
      --extractor 'independent extractor name and version'
    ```
 
-The integrated command checks that the input files contain exactly the scenario IDs in the current synthesis output. Use the standalone commands below to score a full graph split with existing outputs. Scores are grouped by axis and event count and include exact role binding, role swap, omission, hallucination, speech act match, and speech level match rates. `exact_rate` is the proportion of supported scenarios that pass every check. `unsupported_detection_rate` is the proportion of unsupported scenarios for which the model returns unsupported. For pairs with one `a` and one `b`, `contrast_pairs` counts exact role bindings in both variants (`both_bindings_exact`) and full semantic matches in both variants (`both_exact`).
+The integrated command checks that the input files contain exactly the scenario IDs in the current synthesis output. Use the standalone commands below to score a graph split with existing outputs. Add `--partial` to both commands when evaluating a subset. Scores are grouped by axis and event count and include exact role binding, role swap, omission, hallucination, speech act match, and speech level match rates. `exact_rate` is the proportion of supported scenarios that pass every check. `unsupported_detection_rate` is the proportion of unsupported scenarios for which the model returns unsupported. For pairs with one `a` and one `b`, `contrast_pairs` counts exact role bindings in both variants (`both_bindings_exact`) and full semantic matches in both variants (`both_exact`).
 
 ## Standalone commands and tests
 
@@ -270,7 +270,7 @@ python3 review_dataset.py finalize --input data/runs/pilot30_seed2027_v4/synthes
 python3 score_outputs.py prepare --input data/runs/pilot30_seed2027_v4/graphs.jsonl \
   --predictions outputs.jsonl --output extraction_jobs.jsonl
 python3 score_outputs.py score --input data/runs/pilot30_seed2027_v4/graphs.jsonl \
-  --predictions independent_extractions.jsonl \
+  --predictions outputs.jsonl --extractions independent_extractions.jsonl \
   --extractor 'independent extractor name and version' --output scores.json
 
 # Run regression tests with mocked API calls

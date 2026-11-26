@@ -118,7 +118,7 @@ UTF-8 JSONL 파일은 한 줄에 한 시나리오를 저장합니다. 주요 키
 | `--max-retries` | `2` | 최초 시도 이후 문체별 재생성 횟수. `0`·`1`·`2` |
 | `--author-review` | 생략 | 저자가 작성한 검수 JSONL. 전달하면 최종본과 최종 품질 지표를 저장합니다. |
 | `--predictions` | 생략 | 실험 모델의 발화 JSONL. 독립 역추출용 작업 파일을 만듭니다. |
-| `--extractions`, `--extractor` | 생략 | 독립 역추출 결과 JSONL과 추출기 이름·버전. 둘을 전달하면 점수를 리포트에 추가합니다. |
+| `--extractions`, `--extractor` | 생략 | 독립 역추출 결과 JSONL과 추출기 이름·버전. 원본 `--predictions`도 함께 전달합니다. |
 
 | 실행 폴더의 파일 | 확인할 내용 |
 | --- | --- |
@@ -235,15 +235,15 @@ python3 validate_dataset.py data/runs/pilot30_seed2027_v4/final.jsonl --stage fi
      --predictions outputs.jsonl
    ```
 
-3. 역추출 결과를 `{"id":"시나리오 ID","extraction":{...}}` 형식으로 저장합니다. `extraction`에는 `speech_act`, `speech_level`, `events`, `discourse`, `extra_facts`가 필요합니다. 각 사건은 `event_id`, `frame`, `roles`를 담고, 외부 추출 결과의 `roles`는 `{"Theme":"약초"}`처럼 역할명과 표기를 연결한 객체입니다. 미지원 반환은 원래의 `{"id":"…","status":"unsupported"}`를 사용합니다.
+3. 역추출 결과를 `{"id":"시나리오 ID","input_sha256":"작업 파일의 해시","extraction":{...}}` 형식으로 저장합니다. `extraction`에는 `speech_act`, `speech_level`, `events`, `discourse`, `extra_facts`가 필요합니다. 각 사건은 `event_id`, `frame`, `roles`를 담고, 외부 추출 결과의 `roles`는 `{"Theme":"약초"}`처럼 역할명과 표기를 연결한 객체입니다. `empty`와 `unsupported` 작업은 `id`, `input_sha256`, `status`를 그대로 복사합니다.
 
    ```bash
    python3 main.py --split pilot30 --run-dir data/runs/pilot30_seed2027_v4 \
-     --extractions independent_extractions.jsonl \
+     --predictions outputs.jsonl --extractions independent_extractions.jsonl \
      --extractor '독립 추출기 이름과 버전'
    ```
 
-통합 명령은 현재 합성 산출물의 시나리오 ID와 입력 파일의 ID가 일치하는지 검사합니다. 전체 분할의 그래프와 출력만으로 독립 채점을 실행하려면 아래의 개별 명령을 사용할 수 있습니다. 채점은 사건 수·축별 역할 바인딩 일치율, 역할 교차율, 누락률, 환각률, 화행·화체 일치율을 집계합니다. `exact_rate`는 모든 검사에 통과한 지원 시나리오 비율이며, `unsupported_detection_rate`는 미지원 시나리오를 미지원으로 반환한 비율입니다. `contrast_pairs`는 `a`와 `b`가 각각 한 번씩 있는 쌍에 대해 양쪽의 역할 바인딩 일치 건수(`both_bindings_exact`)와 전체 의미 검사 통과 건수(`both_exact`)를 집계합니다.
+통합 명령은 현재 합성 산출물의 시나리오 ID와 입력 파일의 ID가 일치하는지 검사합니다. 전체 분할의 그래프와 출력만으로 독립 채점을 실행하려면 아래의 개별 명령을 사용할 수 있습니다. 일부 시나리오만 평가할 때는 두 개별 명령에 `--partial`을 붙입니다. 채점은 사건 수·축별 역할 바인딩 일치율, 역할 교차율, 누락률, 환각률, 화행·화체 일치율을 집계합니다. `exact_rate`는 모든 검사에 통과한 지원 시나리오 비율이며, `unsupported_detection_rate`는 미지원 시나리오를 미지원으로 반환한 비율입니다. `contrast_pairs`는 `a`와 `b`가 각각 한 번씩 있는 쌍에 대해 양쪽의 역할 바인딩 일치 건수(`both_bindings_exact`)와 전체 의미 검사 통과 건수(`both_exact`)를 집계합니다.
 
 ## 단계별 실행과 테스트
 
@@ -270,7 +270,7 @@ python3 review_dataset.py finalize --input data/runs/pilot30_seed2027_v4/synthes
 python3 score_outputs.py prepare --input data/runs/pilot30_seed2027_v4/graphs.jsonl \
   --predictions outputs.jsonl --output extraction_jobs.jsonl
 python3 score_outputs.py score --input data/runs/pilot30_seed2027_v4/graphs.jsonl \
-  --predictions independent_extractions.jsonl \
+  --predictions outputs.jsonl --extractions independent_extractions.jsonl \
   --extractor '독립 추출기 이름과 버전' --output scores.json
 
 # API를 모의 호출하는 회귀 테스트

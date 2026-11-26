@@ -255,7 +255,7 @@ def validate_coverage(records, split, pairs):
                 "Axis 4 must cover every unsupported frame")
 
 
-def validate_records(records, stage="graphs", partial=False):
+def validate_records(records, stage="graphs", partial=False, *, allow_incomplete_pairs=False):
     require(bool(records), "Empty dataset file")
     unique_index(records, "id")
     validate_lexicon()
@@ -273,11 +273,13 @@ def validate_records(records, stage="graphs", partial=False):
     split = records[0]["split"]
     require(all((r["split"], r["seed"]) == (split, records[0]["seed"]) for r in records), "Mixed splits or seeds")
     for pair_id, members in pairs.items():
+        if partial and allow_incomplete_pairs and len(members) == 1:
+            continue
         try:
             validate_pair(members)
         except ValueError as exc:
             raise ValueError(f"{pair_id}: {exc}") from exc
-    # 부분 실행도 행 단위 검사와 대조쌍 검사를 거친다. 전체 분할의 개수 조건만 생략한다.
+    # 부분 실행은 전체 분할의 개수 조건을 생략한다.
     if not partial:
         validate_coverage(records, split, pairs)
     return split, len(pairs)
